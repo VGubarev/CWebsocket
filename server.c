@@ -10,7 +10,7 @@ int main(int argc, char *argv[])
 {
     int sockfd, newsockfd, portno = 2812, clilen;
 	int enable = 1;
-    char buffer[4096];
+    unsigned char buffer[4096];
     struct sockaddr_in serv_addr, cli_addr;
     int n;
 	unsigned char key[25];
@@ -39,18 +39,28 @@ int main(int argc, char *argv[])
         error("ERROR on accept");
 
     n = read(newsockfd,buffer,4095);
+	buffer[n] = 0;
 
     if (n < 0) error("ERROR reading from socket");
 
 	
-	extract_key_from_valid_headers(buffer, key);
+	http_extract_key_from_valid_headers(buffer, key);
 	//shit
 	unsigned char *accepted_key = malloc(29);
-	calculate_websocket_hash(key, accepted_key);	
+	websocket_calculate_hash(key, accepted_key);	
 
-    n = write(newsockfd,"I got your message",18);
+	char *http_answer_handshake = http_build_answer_handshake(accepted_key);
+
+    n = write(newsockfd,http_answer_handshake,strlen(http_answer_handshake));
 
     if (n < 0) error("ERROR writing to socket");
-
+	//now handshake ends and we can start exchange messages 
+	//receive some websocket header + xor'ed bytes
+    n = read(newsockfd,buffer,4095);
+	buffer[n] = 0;
+	struct websocket_decode_t receive = websocket_decode_message(buffer);
+	printf("Got: %s\n",receive.data_pointer);
+	char *encoded = websocket_encode_message(receive.data_pointer);
+    n = write(newsockfd,encoded,strlen(encoded));
     return 0;
 }
