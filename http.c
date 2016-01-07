@@ -24,7 +24,6 @@ int http_extract_key_from_valid_headers(char *headers, unsigned char *key){
 }
 
 /*dont forget to free all returns*/
-//what the hell.. omfg
 /*
 	HTTP/1.1 101 Switching Protocols\r\n
 	Upgrade: websocket\r\n

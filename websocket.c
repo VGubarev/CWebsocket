@@ -5,6 +5,18 @@
 #include <openssl/buffer.h>
 #include <stdint.h>
 
+
+//lyl, what the hell?
+static size_t bytes_to_number(unsigned char *buffer, size_t from, size_t to){
+	//dirty hack
+	size_t result = *((size_t*)&buffer[from]);
+	if(to - from == 2){
+		result = result & 0xFF;
+	} else if(to - from == 4){
+		result = result & 0xFFFF;
+	}
+	return result;
+}
 static int base64_encode(const unsigned char* buffer, size_t length, unsigned char* b64text) { 
 	BIO *bio, *b64;
 	BUF_MEM *bufferPtr;
@@ -36,6 +48,7 @@ int websocket_calculate_hash(const unsigned char *user_handshake, unsigned char 
         return 1;
     size_t magic_length = strlen(magic);
 	//sucks
+	//TODO: remove dat calloc
     unsigned char *handshake = calloc(handshake_length + magic_length + 1, sizeof(char));
     strcat(handshake, user_handshake);
     strcat(handshake, magic);
@@ -48,114 +61,142 @@ int websocket_calculate_hash(const unsigned char *user_handshake, unsigned char 
 
 
 
-/*
-	   0                   1                   2                   3
-      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-     +-+-+-+-+-------+-+-------------+-------------------------------+
-     |F|R|R|R| opcode|M| Payload len |    Extended payload length    |
-     |I|S|S|S|  (4)  |A|     (7)     |             (16/64)           |
-     |N|V|V|V|       |S|             |   (if payload len==126/127)   |
-     | |1|2|3|       |K|             |                               |
-     +-+-+-+-+-------+-+-------------+ - - - - - - - - - - - - - - - +
-     |     Extended payload length continued, if payload len == 127  |
-     + - - - - - - - - - - - - - - - +-------------------------------+
-     |                               |Masking-key, if MASK set to 1  |
-     +-------------------------------+-------------------------------+
-     | Masking-key (continued)       |          Payload Data         |
-     +-------------------------------- - - - - - - - - - - - - - - - +
-     :                     Payload Data continued ...                :
-     + - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
-     |                     Payload Data continued ...                |
-     +---------------------------------------------------------------+
-*/
+	/*
+		   0                   1                   2                   3
+		  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+		 +-+-+-+-+-------+-+-------------+-------------------------------+
+		 |F|R|R|R| opcode|M| Payload len |    Extended payload length    |
+		 |I|S|S|S|  (4)  |A|     (7)     |             (16/64)           |
+		 |N|V|V|V|       |S|             |   (if payload len==126/127)   |
+		 | |1|2|3|       |K|             |                               |
+		 +-+-+-+-+-------+-+-------------+ - - - - - - - - - - - - - - - +
+		 |     Extended payload length continued, if payload len == 127  |
+		 + - - - - - - - - - - - - - - - +-------------------------------+
+		 |                               |Masking-key, if MASK set to 1  |
+		 +-------------------------------+-------------------------------+
+		 | Masking-key (continued)       |          Payload Data         |
+		 +-------------------------------- - - - - - - - - - - - - - - - +
+		 :                     Payload Data continued ...                :
+		 + - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
+		 |                     Payload Data continued ...                |
+		 +---------------------------------------------------------------+
+	*/
 
-/* message valid if: data xor'ed, fin = 1, rsv1-3 = 0, opcode = 1
-   then function returns 0, else 1 in errcode in websocket_decode_t
-   if valid, also data_pointer != NULL
-*/
-//worst parser ever..
-struct websocket_decode_t websocket_decode_message(unsigned char *buffer){
-	struct websocket_decode_t result;
-	size_t payload_length, payload_offset = 0,mask_offset;
-	//it's isy to check for valid. First byte must be eq 81
-	if(buffer[0] != 0x81){
-		result.errcode = 1;
-		return result;
-	} else {
-		payload_offset++;
+	/*So. Struct 
+		fin: 1 bit
+			1 or 0
+		rsv: 3 bits
+		opcode: 4 bits
+			0 - continuation
+			1 - text
+			2 - binary
+			8 - pure closing
+			9 - ping
+			A - pong
+
+		is_masked: 1 bit
+			must be 1
+		payload_len: 7 bit
+			if < 126 then it's payload
+			if == 126 then following byte it is payload len
+			if == 127 then following 8 bytes is payload len
+
+		mask: MUST BE 4 bytes
+
+		payload: *payload_len* bytes
+	*/
+	struct websocket_message_t websocket_decode_message(unsigned char *buffer){
+		struct websocket_message_t message;
+
+		short highter_bit_mask = 0x80;
+		short opcode_mask = 0x0F;
+		short payload_mask = 0x7F;
+
+		size_t i;
+
+		size_t payload_length; 
+
+		char *mask = NULL;
+
+		message.fin = (buffer[0] & highter_bit_mask) >> 7;
+		message.opcode = buffer[0] & opcode_mask;
+		message.is_masked = (buffer[1] & highter_bit_mask) >> 7;
+
+		if(message.is_masked == 0){
+			message.errcode = EWSMASKING;
+			return message;
+		}
+		if(message.fin == 1 && message.opcode == 0){
+			//not on my watch, scum!
+			message.errcode = EWSFINCONT;
+			return message;
+		}
+
+		payload_length = buffer[1] & payload_mask;
+		if(payload_length < 126){
+			mask = buffer+2;		
+			message.data_pointer = buffer+6;
+		} else if(payload_length == 126){
+			mask = buffer+4;
+			payload_length = bytes_to_number(buffer+2, 2, 4);
+			message.data_pointer = buffer+8;
+		} else if(payload_length == 127){
+			mask = buffer+10;
+			payload_length = bytes_to_number(buffer+2, 2, 10);
+			message.data_pointer = buffer+14;
+		}
+
+		for(i = 0; i < payload_length; i++){
+			mask[4+i] = mask[4+i] ^ mask[i%4];
+		}
+
+		return message;
 	}
 
-	//then get length and mask
-	int length_mask = 0x7F; 
-	int mask_mask = 0x80; //lol
-	if((buffer[1] & mask_mask) != mask_mask){
-		//not masked
-		result.errcode = 1;
-		return result;
+	//dont forget clean malloc allocations
+char *websocket_encode_message(const struct websocket_message_t *message){
+	size_t header_length = 2 + message->is_masked*4;
+	size_t payload_length = strlen(message->data_pointer);
+	size_t payload_length_save = payload_length;
+
+	char *ptr = NULL;;
+
+	size_t i;
+
+	if(payload_length >= 65536){
+		payload_length = 127;
+		header_length += 8;
+	} else if(payload_length < 65536 && payload_length > 125){
+		payload_length = 126;
+		header_length += 2; //16 bits for length
 	}
 
-	if((buffer[1] & length_mask) < 126){
-		payload_length = (buffer[1] & length_mask);
-		payload_offset++;
-	} else if((buffer[1] & length_mask) == 126){
-		payload_length = eight_bytes_to_number(buffer,2,3);		
-		payload_offset+=2;
-	} else if((buffer[1] & length_mask) == 127){
-		payload_length = eight_bytes_to_number(buffer,2,9);		
-		payload_offset+=8;
-	}
-	mask_offset = payload_offset;
-	payload_offset+=4; //mask
-	for(int i = 0; i < payload_length; i++){
-		buffer[payload_offset+i] = buffer[payload_offset+i] ^ buffer[mask_offset + i%4];
-	}
+	char *bytes = malloc(header_length + payload_length + 1);
+	ptr = bytes; 
 
-	result.errcode = 0;
-	result.data_pointer=buffer+payload_offset;
-	return result;
-}
-
-//dont forget clean malloc allocations
-char *websocket_encode_message(char *payload){
-	size_t payload_length = strlen(payload);
-	char *message;
-	size_t offset = 0;
-	if(payload_length < 126){
-		message = malloc(payload_length + 1 + 1);
-		message[1] = payload_length;
-		offset = 2;
-	} else if(payload_length == 126){
-		message = malloc(payload_length + 2 + 1);
-		message[1] = (payload_length >> 8) & 0xFF;
-		message[2] = payload_length & 0xFF;
-		offset = 3;
+	bytes[0] = (message->fin << 7) | message->opcode; //fin,rsrv + opcode
+	bytes[1] = (message->is_masked << 7) | payload_length;
+	ptr += 2;
+	
+	if(payload_length == 126){
+		*ptr = *((size_t*)&payload_length_save);
+		ptr += 2;
 	} else if(payload_length == 127){
-		message = malloc(payload_length + 8 + 1);
-		message[1] = (payload_length >> 56) & 0xFF;
-		message[2] = (payload_length >> 48) & 0xFF;
-		message[3] = (payload_length >> 40) & 0xFF;
-		message[4] = (payload_length >> 32) & 0xFF;
-		message[5] = (payload_length >> 24) & 0xFF;
-		message[6] = (payload_length >> 16) & 0xFF;
-		message[7] = (payload_length >> 8) & 0xFF;
-		message[8] = payload_length & 0xFF;
-		offset = 9;
+		*ptr = *((size_t*)&payload_length_save);
+		ptr += 8;
 	}
-	message[0] = 0x81; //always it's final text frame
-	for(int i = 0; i < payload_length; i++){
-		message[offset+i] = payload[i];
+
+	if(message->is_masked == 1){
+		//blablabla, gen mask and xor payload
+		ptr += 4;
 	}
-	return message;
+
+	for(i = 0; i < payload_length_save; i++){
+		*(ptr+i) = (message->data_pointer)[i];
+	}
+	*(ptr+i) = 0; //string-terminator
+
+	return bytes;
 }
 
-//lyl, what the hell?
-size_t eight_bytes_to_number(unsigned char *buffer, size_t from, size_t to){
-	//dirty hack
-	size_t result = *((size_t*)&buffer[from]);
-	if(to - from == 2){
-		result = result & 0xFF;
-	} else if(to - from == 4){
-		result = result & 0xFFFF;
-	}
-	return result;
-}
+

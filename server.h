@@ -17,13 +17,34 @@ char *http_build_answer_handshake(unsigned char *accepted_key);
 
 /*websocket section*/
 
-struct websocket_decode_t{
+//errors
+enum {
+	EWSMASKING = 1,
+	EWSFINCONT,
+	EWSLONG,
+	EWSUNDEF
+};
+
+
+//opcodes
+enum {
+	OPCONT = 0,
+	OPTEXT,
+	OPBIN,
+	OPCLOSE = 8,
+	OPPING,
+	OPPONG
+};
+
+struct websocket_message_t{
 	int errcode;
+	short fin;
+	short opcode;
+	short is_masked;
 	char *data_pointer;
 };
 
 
 int websocket_calculate_hash(const unsigned char *user_handshake, unsigned char *server_handshake);
-size_t eight_bytes_to_number(unsigned char *buffer, size_t from, size_t to);
-struct websocket_decode_t websocket_decode_message(unsigned char *buffer);
-char *websocket_encode_message(char *payload);
+struct websocket_message_t websocket_decode_message(unsigned char *buffer);
+char *websocket_encode_message(const struct websocket_message_t *message);

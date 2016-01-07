@@ -42,7 +42,6 @@ int main(int argc, char *argv[])
 	buffer[n] = 0;
 
     if (n < 0) error("ERROR reading from socket");
-
 	
 	http_extract_key_from_valid_headers(buffer, key);
 	//shit
@@ -50,17 +49,26 @@ int main(int argc, char *argv[])
 	websocket_calculate_hash(key, accepted_key);	
 
 	char *http_answer_handshake = http_build_answer_handshake(accepted_key);
-
     n = write(newsockfd,http_answer_handshake,strlen(http_answer_handshake));
 
-    if (n < 0) error("ERROR writing to socket");
+    //if (n < 0) error("ERROR writing to socket");
 	//now handshake ends and we can start exchange messages 
 	//receive some websocket header + xor'ed bytes
-    n = read(newsockfd,buffer,4095);
-	buffer[n] = 0;
-	struct websocket_decode_t receive = websocket_decode_message(buffer);
-	printf("Got: %s\n",receive.data_pointer);
-	char *encoded = websocket_encode_message(receive.data_pointer);
-    n = write(newsockfd,encoded,strlen(encoded));
+   		n = read(newsockfd,buffer,4095);
+   		buffer[n] = 0;
+   		struct websocket_message_t receive = websocket_decode_message(buffer);
+   		printf("Got: %s\n",receive.data_pointer);
+		receive.fin = 1;
+		receive.opcode = OPTEXT;
+		receive.is_masked = 0;
+   		char *encoded = websocket_encode_message(&receive);
+   		n = write(newsockfd,encoded,strlen(encoded));
+		char hello[] = "hello";
+		receive.data_pointer = hello;
+		receive.fin = 1;
+		receive.opcode = OPTEXT;
+		receive.is_masked = 0;
+   		char *encoded2 = websocket_encode_message(&receive);
+   		n = write(newsockfd,encoded2,strlen(encoded2));
     return 0;
 }
