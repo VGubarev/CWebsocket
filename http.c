@@ -20,6 +20,7 @@ int http_extract_key_from_valid_headers(char *headers, unsigned char *key){
 	if(sec_websocket_key == NULL)
 		return 1;
 	memcpy(key, sec_websocket_key, 24);
+	key[24] = 0;
 	return 0;
 }
 

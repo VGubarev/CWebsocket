@@ -1,5 +1,5 @@
 CFLAGS=-g -c -o
-LFLAGS=-lssl -lcrypto -o
+LFLAGS=-lrt -lssl -lcrypto -o
 
 server: server.o websocket.o http.o
 	gcc ${LFLAGS} $@ $^

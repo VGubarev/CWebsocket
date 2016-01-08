@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+//aio
+#include <aio.h>
+#include <stddef.h>
 
 
 #define SHA_DIGEST_LEN 20
@@ -44,6 +47,14 @@ struct websocket_message_t{
 	char *data_pointer;
 };
 
+struct client_t{
+	int socketfd;
+	struct sockaddr_in client_socket;
+	struct aiocb aio_cb_read;
+	struct aiocb aio_cb_write;
+	char *extended_read_buffer;
+	char *extended_write_buffer;
+};
 
 int websocket_calculate_hash(const unsigned char *user_handshake, unsigned char *server_handshake);
 struct websocket_message_t websocket_decode_message(unsigned char *buffer);
