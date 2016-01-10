@@ -14,14 +14,14 @@ Accept-Language: ru-RU,ru;q=0.8,en-US;q=0.6,en;q=0.4,bg;q=0.2
 Sec-WebSocket-Key: 59dD1Ffrr2yih5LBb+QTfA==
 Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
 */
-int http_extract_key_from_valid_headers(char *headers, unsigned char *key){
+bool http_extract_key_from_valid_headers(char *headers, unsigned char *key){
 	char *sec_websocket_key = strstr(headers, "Sec-WebSocket-Key: ") + 19;
 	//skip header to reach key (19 is length of head)
 	if(sec_websocket_key == NULL)
-		return 1;
+		return true;
 	memcpy(key, sec_websocket_key, 24);
 	key[24] = 0;
-	return 0;
+	return false;
 }
 
 /*dont forget to free all returns*/
@@ -32,9 +32,9 @@ int http_extract_key_from_valid_headers(char *headers, unsigned char *key){
 	Sec-WebSocket-Accept: HASH\r\n\r\n
 */
 char *http_build_answer_handshake(unsigned char *accepted_key){
-	int accepted_length = strlen(accepted_key);
+	size_t accepted_length = strlen((char*)accepted_key);
 											//headers length \r\n + text len
-	char *answer = malloc(accepted_length + 2 + 2 + 2 + 4 + 32 + 18 + 19 + 22 + 1);
+	char *answer = calloc(1, accepted_length + 2 + 2 + 2 + 4 + 32 + 18 + 19 + 22 + 1);
 	sprintf(answer, "HTTP/1.1 101 Switching Protocols\r\n\
 Upgrade: websocket\r\n\
 Connection: Upgrade\r\n\
