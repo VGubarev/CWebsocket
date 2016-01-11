@@ -1,4 +1,4 @@
-#include "server.h"
+#include "http.h"
 /*
 GET / HTTP/1.1
 Host: localhost:2812
@@ -15,13 +15,14 @@ Sec-WebSocket-Key: 59dD1Ffrr2yih5LBb+QTfA==
 Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
 */
 bool http_extract_key_from_valid_headers(char *headers, unsigned char *key){
+	//TODO: check for version, upgrade, key, etc..
 	char *sec_websocket_key = strstr(headers, "Sec-WebSocket-Key: ") + 19;
 	//skip header to reach key (19 is length of head)
 	if(sec_websocket_key == NULL)
-		return true;
+		return false;
 	memcpy(key, sec_websocket_key, 24);
 	key[24] = 0;
-	return false;
+	return true;
 }
 
 /*dont forget to free all returns*/

@@ -1,9 +1,4 @@
-#include "server.h"
-//Encodes Base64
-#include <openssl/bio.h>
-#include <openssl/evp.h>
-#include <openssl/buffer.h>
-#include <stdint.h>
+#include "websocket.h"
 
 
 //lyl, what the hell?
@@ -17,7 +12,7 @@ static size_t bytes_to_number(unsigned char *buffer, size_t from, size_t to){
 	}
 	return result;
 }
-static int base64_encode(const unsigned char* buffer, size_t length, unsigned char* b64text) { 
+static int base64_encode(const unsigned char* buffer, size_t length, unsigned char* b64text) {
 	BIO *bio, *b64;
 	BUF_MEM *bufferPtr;
 
@@ -52,7 +47,7 @@ int websocket_calculate_hash(const unsigned char *const user_handshake, unsigned
     strcat(handshake, user_handshake);
     strcat(handshake, magic);
 
-	unsigned char server_sha1[21];
+	unsigned char server_sha1[21] = {0};
     SHA1(handshake, handshake_length+magic_length, server_sha1);
 	server_sha1[20] = 0;
 	base64_encode(server_sha1, strlen(server_sha1), server_handshake);
@@ -80,9 +75,10 @@ int websocket_calculate_hash(const unsigned char *const user_handshake, unsigned
 	 |                     Payload Data continued ...                |
 	 +---------------------------------------------------------------+
 */
-struct websocket_message_t websocket_decode_message(void *ptr){
+//message decoded in the same memory
+struct websocket_message_t *websocket_decode_message(void *ptr){
 	unsigned char *buffer = ptr;
-	struct websocket_message_t message;
+	struct websocket_message_t *message = calloc(1, sizeof(struct websocket_message_t));
 
 	int8_t highter_bit_mask = 0x80;
 	int8_t opcode_mask = 0x0F;
@@ -92,17 +88,17 @@ struct websocket_message_t websocket_decode_message(void *ptr){
 
 	unsigned char *mask = NULL;
 
-	message.fin = (buffer[0] & highter_bit_mask) >> 7;
-	message.opcode = buffer[0] & opcode_mask;
-	message.is_masked = (buffer[1] & highter_bit_mask) >> 7;
+	message->fin = (buffer[0] & highter_bit_mask) >> 7;
+	message->opcode = buffer[0] & opcode_mask;
+	message->is_masked = (bool)((buffer[1] & highter_bit_mask) >> 7);
 
-	if(message.is_masked == 0){
-		message.errcode = EWSMASKING;
+	if(message->is_masked == 0){
+		message->errcode = EWSMASKING;
 		return message;
 	}
-	if(message.fin == 1 && message.opcode == 0){
+	if(message->fin == 1 && message->opcode == 0){
 		//not on my watch, scum!
-		message.errcode = EWSFINCONT;
+		message->errcode = EWSFINCONT;
 		return message;
 	}
 
@@ -110,26 +106,33 @@ struct websocket_message_t websocket_decode_message(void *ptr){
 
 	if(payload_length < 126){
 		mask = buffer+2;		
-		message.data_pointer = buffer+6;
+		message->data_pointer = buffer+6;
 	} else if(payload_length == 126){
 		mask = buffer+4;
 		payload_length = bytes_to_number(buffer+2, 2, 4);
-		message.data_pointer = buffer+8;
+		message->data_pointer = buffer+8;
 	} else if(payload_length == 127){
 		mask = buffer+10;
 		payload_length = bytes_to_number(buffer+2, 2, 10);
-		message.data_pointer = buffer+14;
+		message->data_pointer = buffer+14;
 	}
 
-	for(size_t i = 0; i < payload_length; i++){
-		mask[4+i] = mask[4+i] ^ mask[i%4];
+	message->length = payload_length;
+	if(payload_length > 131072){
+		message->errcode = EWSLONG;
+	} else {
+		if (message->is_masked) {
+			for (size_t i = 0; i < payload_length; i++) {
+				mask[4 + i] = mask[4 + i] ^ mask[i % 4];
+			}
+		}
 	}
 
 	return message;
 }
 
 	//dont forget clean malloc allocations
-char *websocket_encode_message(const struct websocket_message_t *message){
+uint8_t * websocket_encode_message(const struct websocket_message_t *message){
 	size_t header_length = 2 + message->is_masked*4;
 	size_t payload_length = strlen(message->data_pointer);
 	size_t payload_length_save = payload_length;
@@ -144,8 +147,8 @@ char *websocket_encode_message(const struct websocket_message_t *message){
 		header_length += 2; //16 bits for length
 	}
 
-	char *bytes = calloc(1, header_length + payload_length + 1);
-	char *ptr = bytes;
+	uint8_t *bytes = calloc(1, header_length + payload_length + 1);
+	uint8_t *ptr = bytes;
 
 	bytes[0] = (message->fin << 7) | message->opcode; //fin,rsrv + opcode
 	bytes[1] = (message->is_masked << 7) | payload_length;
@@ -166,7 +169,7 @@ char *websocket_encode_message(const struct websocket_message_t *message){
 
 	size_t i;
 	for(i = 0; i < payload_length_save; i++){
-		*(ptr+i) = (message->data_pointer)[i];
+		*(ptr+i) = (uint8_t)(message->data_pointer)[i];
 	}
 
 	return bytes;
