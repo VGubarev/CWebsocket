@@ -26,3 +26,11 @@ struct client_t{
 	sem_t sem_write;
 };
 
+enum ESERVER{
+	EWBUF = 1, //op with write buffer failed
+	ERBUF,	// -//- read -//-
+	SWBUF, //success op with write buffer
+	SRBUF  // -//- read buffer
+};
+
+void async_dataframe_read_completition_handler(sigval_t sigval);

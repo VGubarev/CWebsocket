@@ -118,26 +118,29 @@ struct websocket_message_t *websocket_decode_message(void *ptr){
 	}
 
 	message->length = payload_length;
-	if(payload_length > 131072){
+	if(payload_length > 131072)
 		message->errcode = EWSLONG;
-	} else {
-		if (message->is_masked) {
-			for (size_t i = 0; i < payload_length; i++) {
-				mask[4 + i] = mask[4 + i] ^ mask[i % 4];
-			}
+
+	return message;
+}
+
+struct websocket_message_t *websocket_unxor_message(struct websocket_message_t *message){
+	if (message->is_masked) {
+		char *mask = message->data_pointer-4;
+		for (size_t i = 0; i < message->length; i++) {
+			message->data_pointer[i] = message->data_pointer[i] ^ mask[i % 4];
 		}
 	}
 
 	return message;
 }
 
+
 	//dont forget clean malloc allocations
-uint8_t * websocket_encode_message(const struct websocket_message_t *message){
+char * websocket_encode_message(const struct websocket_message_t *message){
 	size_t header_length = 2 + message->is_masked*4;
 	size_t payload_length = strlen(message->data_pointer);
 	size_t payload_length_save = payload_length;
-
-
 
 	if(payload_length >= 65536){
 		payload_length = 127;
@@ -147,8 +150,8 @@ uint8_t * websocket_encode_message(const struct websocket_message_t *message){
 		header_length += 2; //16 bits for length
 	}
 
-	uint8_t *bytes = calloc(1, header_length + payload_length + 1);
-	uint8_t *ptr = bytes;
+	char *bytes = calloc(1, header_length + payload_length + 1);
+	char *ptr = bytes;
 
 	bytes[0] = (message->fin << 7) | message->opcode; //fin,rsrv + opcode
 	bytes[1] = (message->is_masked << 7) | payload_length;

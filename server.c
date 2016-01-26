@@ -5,8 +5,28 @@
 #define MAX_CLIENTS 100
 #define BUFFER_SIZE 4095
 
+int8_t handle_write_buffer(struct client_t* req, char *data_pointer){
+	size_t answer_length;
 
-void async_read_completition_handler(sigval_t sigval){
+	if ((answer_length = strlen(data_pointer)) <= req->write_capacity) {
+		req->aio_cb_write.aio_nbytes = answer_length;
+	} else {
+		//then extend buffer
+		char *ptr = realloc(&req->aio_cb_write.aio_buf, answer_length + 1);
+		if (ptr != NULL) {
+			req->write_capacity = answer_length;
+
+			req->aio_cb_write.aio_buf = ptr;
+			req->aio_cb_write.aio_nbytes = answer_length;
+		} else {
+			//TODO: alloc failed, handle disconnect
+			return EWBUF;
+		}
+	}
+	return SWBUF;
+}
+
+void async_headers_read_completition_handler(sigval_t sigval){
 	struct client_t *req;
 	req = (struct client_t*)sigval.sival_ptr;
 	ssize_t res;
@@ -17,81 +37,41 @@ void async_read_completition_handler(sigval_t sigval){
 
 		sem_wait(&req->sem_read);
 
-		if(req->handshake) {
-			//websocket dataframe
+		 //then there are http request
+		unsigned char key[25] = {0};
+		unsigned char accepted_key[29] = {0};
 
-			((char *) (req->aio_cb_read.aio_buf))[res] = 0;
-
-			//TODO: wrong, dont cast to non-volatile, lock aio_buf, copy to non-volatile, unlock aio_buf
-			struct websocket_message_t *receive = websocket_decode_message((void *) req->aio_cb_read.aio_buf);
-			//what the f..reak
-			if(receive->errcode != OPCONT && receive->opcode != OPTEXT && receive->opcode != OPBIN &&
-					receive->errcode != OPPING && receive->errcode != OPPONG && receive->errcode != OPCLOSE){
-				//TODO: invalid message, handle disconnect
-				return;
-			}
+		//TODO: wrong, dont cast to non-volatile, lock aio_buf, copy to non-volatile, unlock aio_buf
+		bool is_headers_valid = http_extract_key_from_valid_headers((char*)req->aio_cb_read.aio_buf, key);
 
 
-			//TODO: handle long messages
-			receive->fin = 1;
-			if(receive->opcode == OPPING){
-				receive->opcode = OPPONG;
-				receive->data_pointer = NULL;
-			} else {
-				receive->opcode = OPTEXT;
-			}
-			receive->is_masked = 0;
-
-			data_pointer = websocket_encode_message(receive);
-			free(receive);
-
-		} else {
-			 //then there are http request
-			unsigned char key[25] = {0};
-			unsigned char accepted_key[29] = {0};
-
-			//TODO: wrong, dont cast to non-volatile, lock aio_buf, copy to non-volatile, unlock aio_buf
-			bool is_headers_valid = http_extract_key_from_valid_headers((char*)req->aio_cb_read.aio_buf, key);
-
-
-			if(is_headers_valid == false){
-				//TODO: invalid headers, handle disconnect
-				return;
-			}
-
-			//approve client connection
-			req->handshake = true;
-
-			websocket_calculate_hash(key, accepted_key);
-
-			data_pointer = http_build_answer_handshake(accepted_key);
+		if(is_headers_valid == false){
+			//TODO: invalid headers, handle disconnect
+			return;
 		}
+
+		//approve client connection
+		req->handshake = true;
+
+		websocket_calculate_hash(key, accepted_key);
+
+		data_pointer = http_build_answer_handshake(accepted_key);
 
 		if(data_pointer == NULL){
 			//TODO: alloc failed, handle disconnect
 			return;
 		}
+		//if it's ok, then we can be sure next packet will be websocket_message_t, so change handler to special function
+		req->aio_cb_read.aio_sigevent.sigev_notify_function = async_dataframe_read_completition_handler;
 
 		sem_wait(&req->sem_write);
-		size_t answer_length;
 
-		if ((answer_length = strlen(data_pointer)) <= req->write_capacity) {
-			req->aio_cb_write.aio_nbytes = answer_length;
-		} else {
-			//then extend buffer
-			char *ptr = realloc(&req->aio_cb_write.aio_buf, answer_length + 1);
-			if (ptr != NULL) {
-				req->write_capacity = answer_length;
-
-				req->aio_cb_write.aio_buf = ptr;
-				req->aio_cb_write.aio_nbytes = answer_length;
-			} else {
-				//TODO: alloc failed, handle disconnect
-				return;
-			}
+		uint8_t status = handle_write_buffer(req, data_pointer);
+		if(status != SWBUF){
+			return;
 		}
 
-		memcpy((char*)req->aio_cb_write.aio_buf, data_pointer, answer_length);
+		memcpy((char*)req->aio_cb_write.aio_buf, data_pointer, strlen(data_pointer));
 		free(data_pointer);
 
 		//TODO: socket connection statement
@@ -99,8 +79,63 @@ void async_read_completition_handler(sigval_t sigval){
 	}
 	//TODO: socket connection statement
 	aio_read(&req->aio_cb_read);
-	
+
     return;
+}
+
+
+void async_dataframe_read_completition_handler(sigval_t sigval){
+	struct client_t *req;
+	req = (struct client_t*)sigval.sival_ptr;
+	ssize_t res;
+	char *data_pointer;
+
+	if (aio_error( &req->aio_cb_read ) == 0) {
+		res = aio_return(&req->aio_cb_read);
+
+		//TODO: ...
+		((char *) (req->aio_cb_read.aio_buf))[res] = 0;
+
+		//TODO: wrong, dont cast to non-volatile, lock aio_buf, copy to non-volatile, unlock aio_buf
+		struct websocket_message_t *receive = websocket_decode_message((void *) req->aio_cb_read.aio_buf);
+		receive = websocket_unxor_message(receive);
+		//what the f..reak
+		if(receive->errcode != OPCONT && receive->opcode != OPTEXT && receive->opcode != OPBIN &&
+				receive->errcode != OPPING && receive->errcode != OPPONG && receive->errcode != OPCLOSE){
+			//TODO: invalid message, handle disconnect
+			return;
+		}
+
+
+		//TODO: handle long messages
+		receive->fin = 1;
+		if(receive->opcode == OPPING){
+			receive->opcode = OPPONG;
+			receive->data_pointer = NULL;
+		} else {
+			receive->opcode = OPTEXT;
+		}
+		receive->is_masked = 0;
+
+		data_pointer = websocket_encode_message(receive);
+		free(receive);
+
+		sem_wait(&req->sem_write);
+		uint8_t status = handle_write_buffer(req, data_pointer);
+		if(status != SWBUF){
+			return;
+		}
+
+		memcpy((char*)req->aio_cb_write.aio_buf, data_pointer, strlen(data_pointer));
+		free(data_pointer);
+
+		//TODO: socket connection statement
+		aio_write(&req->aio_cb_write);
+	}
+	//TODO: socket connection statement
+	aio_read(&req->aio_cb_read);
+
+	return;
 }
 
 void async_write_completition_handler(sigval_t sigval){
@@ -172,7 +207,7 @@ int main(int argc, char *argv[])
 
 		(clients[client_offset]).aio_cb_read.aio_sigevent = (struct sigevent){
 			.sigev_notify = SIGEV_THREAD,
-			.sigev_notify_function = async_read_completition_handler,
+			.sigev_notify_function = async_headers_read_completition_handler,
 			.sigev_notify_attributes = NULL,
 			.sigev_value.sival_ptr = (void*)&clients[client_offset]
 		};
