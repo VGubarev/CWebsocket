@@ -11,13 +11,7 @@
     </ADDITIONAL_GENERATION_ENVIRONMENT>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f4b86d5c-40cf-404e-847a-5cd55eb6c086" name="Default" comment="">
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/server.c" afterPath="$PROJECT_DIR$/server.c" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/server.h" afterPath="$PROJECT_DIR$/server.h" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/websocket.c" afterPath="$PROJECT_DIR$/websocket.c" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/websocket.h" afterPath="$PROJECT_DIR$/websocket.h" />
-      <change type="MODIFICATION" beforePath="$PROJECT_DIR$/.idea/workspace.xml" afterPath="$PROJECT_DIR$/.idea/workspace.xml" />
-    </list>
+    <list default="true" id="f4b86d5c-40cf-404e-847a-5cd55eb6c086" name="Default" comment="" />
     <ignored path="exam.iws" />
     <ignored path=".idea/workspace.xml" />
     <option name="EXCLUDED_CONVERTED_TO_IGNORED" value="true" />
@@ -88,7 +82,7 @@
       <file leaf-file-name="websocket.c" pinned="false" current-in-tab="true">
         <entry file="file://$PROJECT_DIR$/websocket.c">
           <provider selected="true" editor-type-id="text-editor">
-            <state vertical-scroll-proportion="0.3809524">
+            <state vertical-scroll-proportion="0.36923078">
               <caret line="131" column="8" selection-start-line="131" selection-start-column="8" selection-end-line="131" selection-end-column="8" />
               <folding />
             </state>
@@ -122,9 +116,8 @@
   </component>
   <component name="OCFindUsagesOptions" text="false" ivars="false" properties="true" derivedClasses="false" />
   <component name="ProjectFrameBounds">
-    <option name="y" value="18" />
     <option name="width" value="1366" />
-    <option name="height" value="731" />
+    <option name="height" value="749" />
   </component>
   <component name="ProjectLevelVcsManager" settingsEditedManually="false">
     <OptionsSetting value="true" id="Add" />
@@ -224,7 +217,7 @@
     </todo-panel>
   </component>
   <component name="ToolWindowManager">
-    <frame x="0" y="18" width="1366" height="731" extended-state="0" />
+    <frame x="0" y="0" width="1366" height="749" extended-state="0" />
     <editor active="true" />
     <layout>
       <window_info id="Project" active="false" anchor="left" auto_hide="false" internal_type="DOCKED" type="DOCKED" visible="true" weight="0.10663684" sideWeight="0.5" order="0" side_tool="false" content_ui="combo" />
@@ -604,7 +597,7 @@
     </entry>
     <entry file="file://$PROJECT_DIR$/websocket.c">
       <provider selected="true" editor-type-id="text-editor">
-        <state vertical-scroll-proportion="0.3809524">
+        <state vertical-scroll-proportion="0.36923078">
           <caret line="131" column="8" selection-start-line="131" selection-start-column="8" selection-end-line="131" selection-end-column="8" />
           <folding />
         </state>

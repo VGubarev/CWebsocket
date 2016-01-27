@@ -76,7 +76,7 @@ int websocket_calculate_hash(const unsigned char *const user_handshake, unsigned
 	 +---------------------------------------------------------------+
 */
 //message decoded in the same memory
-struct websocket_message_t *websocket_decode_message(void *ptr){
+struct websocket_message_t *websocket_decode_headers(void *ptr){
 	unsigned char *buffer = ptr;
 	struct websocket_message_t *message = calloc(1, sizeof(struct websocket_message_t));
 
@@ -137,7 +137,7 @@ struct websocket_message_t *websocket_unxor_message(struct websocket_message_t *
 
 
 	//dont forget clean malloc allocations
-char * websocket_encode_message(const struct websocket_message_t *message){
+char *websocket_encode_message(const struct websocket_message_t *message){
 	size_t header_length = 2 + message->is_masked*4;
 	size_t payload_length = strlen(message->data_pointer);
 	size_t payload_length_save = payload_length;

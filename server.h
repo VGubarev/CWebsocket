@@ -16,7 +16,6 @@
 
 struct client_t{
 	int socketfd;
-	bool handshake;
 	struct sockaddr_in client_socket;
 	struct aiocb aio_cb_read;
 	size_t read_capacity;

@@ -15,7 +15,6 @@ int8_t handle_write_buffer(struct client_t* req, char *data_pointer){
 		char *ptr = realloc(&req->aio_cb_write.aio_buf, answer_length + 1);
 		if (ptr != NULL) {
 			req->write_capacity = answer_length;
-
 			req->aio_cb_write.aio_buf = ptr;
 			req->aio_cb_write.aio_nbytes = answer_length;
 		} else {
@@ -42,16 +41,18 @@ void async_headers_read_completition_handler(sigval_t sigval){
 		unsigned char accepted_key[29] = {0};
 
 		//TODO: wrong, dont cast to non-volatile, lock aio_buf, copy to non-volatile, unlock aio_buf
-		bool is_headers_valid = http_extract_key_from_valid_headers((char*)req->aio_cb_read.aio_buf, key);
+		bool is_headers_valid = http_extract_key_from_valid_headers(
+				(char*)req->aio_cb_read.aio_buf, 
+				key
+		);
 
 
+		sem_post(&req->sem_read);
 		if(is_headers_valid == false){
 			//TODO: invalid headers, handle disconnect
 			return;
 		}
 
-		//approve client connection
-		req->handshake = true;
 
 		websocket_calculate_hash(key, accepted_key);
 
@@ -62,7 +63,8 @@ void async_headers_read_completition_handler(sigval_t sigval){
 			return;
 		}
 		//if it's ok, then we can be sure next packet will be websocket_message_t, so change handler to special function
-		req->aio_cb_read.aio_sigevent.sigev_notify_function = async_dataframe_read_completition_handler;
+		req->aio_cb_read.aio_sigevent.sigev_notify_function = 
+			async_dataframe_read_completition_handler;
 
 		sem_wait(&req->sem_write);
 
@@ -71,7 +73,12 @@ void async_headers_read_completition_handler(sigval_t sigval){
 			return;
 		}
 
-		memcpy((char*)req->aio_cb_write.aio_buf, data_pointer, strlen(data_pointer));
+		memcpy(
+			(char*)req->aio_cb_write.aio_buf, 
+			data_pointer, 
+			strlen(data_pointer)
+		);
+
 		free(data_pointer);
 
 		//TODO: socket connection statement
@@ -97,11 +104,16 @@ void async_dataframe_read_completition_handler(sigval_t sigval){
 		((char *) (req->aio_cb_read.aio_buf))[res] = 0;
 
 		//TODO: wrong, dont cast to non-volatile, lock aio_buf, copy to non-volatile, unlock aio_buf
-		struct websocket_message_t *receive = websocket_decode_message((void *) req->aio_cb_read.aio_buf);
-		receive = websocket_unxor_message(receive);
+		struct websocket_message_t *receive = 
+			websocket_decode_headers((void *) req->aio_cb_read.aio_buf);
+		if(receive->is_masked == 1){
+			receive = websocket_unxor_message(receive);
+		}
 		//what the f..reak
-		if(receive->errcode != OPCONT && receive->opcode != OPTEXT && receive->opcode != OPBIN &&
-				receive->errcode != OPPING && receive->errcode != OPPONG && receive->errcode != OPCLOSE){
+		if(receive->opcode != OPCONT && receive->opcode != OPTEXT && 
+		   receive->opcode != OPBIN  && receive->opcode != OPPING && 
+		   receive->opcode != OPPONG && receive->opcode != OPCLOSE
+		){
 			//TODO: invalid message, handle disconnect
 			return;
 		}
@@ -120,13 +132,19 @@ void async_dataframe_read_completition_handler(sigval_t sigval){
 		data_pointer = websocket_encode_message(receive);
 		free(receive);
 
+		sem_post(&req->sem_read);
 		sem_wait(&req->sem_write);
 		uint8_t status = handle_write_buffer(req, data_pointer);
 		if(status != SWBUF){
 			return;
 		}
 
-		memcpy((char*)req->aio_cb_write.aio_buf, data_pointer, strlen(data_pointer));
+		memcpy(
+			(char*)req->aio_cb_write.aio_buf, 
+			data_pointer, 
+			strlen(data_pointer)
+		);
+
 		free(data_pointer);
 
 		//TODO: socket connection statement
@@ -146,12 +164,14 @@ void async_write_completition_handler(sigval_t sigval){
 	if (aio_error( &req->aio_cb_write ) == 0){
 		res = aio_return( &req->aio_cb_write );
 
-		sem_post(&req->sem_read);
 		sem_post(&req->sem_write);
     }
 
     return;
 }
+
+
+
 int main(int argc, char *argv[])
 {
     int32_t sockfd;
@@ -181,9 +201,11 @@ int main(int argc, char *argv[])
 
     listen(sockfd,MAX_CLIENTS);
 	while(client_offset < MAX_CLIENTS) {
-		(clients[client_offset]).socketfd = accept(sockfd,
-												   (struct sockaddr *) &((clients[client_offset]).client_socket),
-												   (socklen_t *) &clilen);
+		(clients[client_offset]).socketfd = accept(
+				sockfd,
+				(struct sockaddr *) &((clients[client_offset]).client_socket),
+				(socklen_t *) &clilen
+		);
 		if ((clients[client_offset]).socketfd < 0) {
 			puts("ERROR on accept");
 			//continue;
