@@ -18,6 +18,8 @@ struct client_t{
 	int socketfd;
 	struct sockaddr_in client_socket;
 	struct aiocb aio_cb_read;
+	char *read_buffer;
+	size_t read_offset;
 	size_t read_capacity;
 	sem_t sem_read;
 	struct aiocb aio_cb_write;

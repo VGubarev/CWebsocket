@@ -5,6 +5,19 @@
 #define MAX_CLIENTS 100
 #define BUFFER_SIZE 4095
 
+static size_t calc_message_length(struct websocket_message_t *message){
+	return (size_t)2 + message->is_masked*4 + message->length;
+}
+
+static bool is_opcode_valid(uint8_t opcode){
+	if(opcode != OPCONT && opcode != OPTEXT && 
+	   opcode != OPBIN  && opcode != OPPING && 
+	   opcode != OPPONG && opcode != OPCLOSE
+	)
+		return false;
+	return true;
+}
+
 int8_t handle_write_buffer(struct client_t* req, char *data_pointer){
 	size_t answer_length;
 
@@ -42,22 +55,20 @@ void async_headers_read_completition_handler(sigval_t sigval){
 
 		//TODO: wrong, dont cast to non-volatile, lock aio_buf, copy to non-volatile, unlock aio_buf
 		bool is_headers_valid = http_extract_key_from_valid_headers(
-				(char*)req->aio_cb_read.aio_buf, 
-				key
+			(char*)req->aio_cb_read.aio_buf, 
+			key
 		);
-
-
+		
 		sem_post(&req->sem_read);
 		if(is_headers_valid == false){
 			//TODO: invalid headers, handle disconnect
 			return;
 		}
 
-
 		websocket_calculate_hash(key, accepted_key);
 
 		data_pointer = http_build_answer_handshake(accepted_key);
-
+		
 		if(data_pointer == NULL){
 			//TODO: alloc failed, handle disconnect
 			return;
@@ -90,7 +101,6 @@ void async_headers_read_completition_handler(sigval_t sigval){
     return;
 }
 
-
 void async_dataframe_read_completition_handler(sigval_t sigval){
 	struct client_t *req;
 	req = (struct client_t*)sigval.sival_ptr;
@@ -99,26 +109,60 @@ void async_dataframe_read_completition_handler(sigval_t sigval){
 
 	if (aio_error( &req->aio_cb_read ) == 0) {
 		res = aio_return(&req->aio_cb_read);
+		
+		sem_wait(&req->sem_read);
 
-		//TODO: ...
-		((char *) (req->aio_cb_read.aio_buf))[res] = 0;
-
-		//TODO: wrong, dont cast to non-volatile, lock aio_buf, copy to non-volatile, unlock aio_buf
-		struct websocket_message_t *receive = 
-			websocket_decode_headers((void *) req->aio_cb_read.aio_buf);
-		if(receive->is_masked == 1){
-			receive = websocket_unxor_message(receive);
-		}
-		//what the f..reak
-		if(receive->opcode != OPCONT && receive->opcode != OPTEXT && 
-		   receive->opcode != OPBIN  && receive->opcode != OPPING && 
-		   receive->opcode != OPPONG && receive->opcode != OPCLOSE
-		){
-			//TODO: invalid message, handle disconnect
+		if(res == -1){
+			//handle disconnect
 			return;
 		}
 
+		//for next reading
+		memcpy(
+			req->read_buffer + req->read_offset,
+			(void *) req->aio_cb_read.aio_buf, //!!!! 
+			res
+		);
 
+		if(req->read_offset == 0){
+			struct websocket_message_t *receive = 
+				websocket_decode_headers(req->read_buffer);
+			size_t len;
+			if(req->read_capacity < (len = calc_message_length(receive))){
+				//then increase offset 
+				char *ptr = realloc(req->read_buffer, len);
+				if(ptr == NULL){
+					//TODO: handle disconnect
+					return;
+				}
+				req->read_capacity = len;
+				req->read_buffer = ptr;
+			}
+		}
+
+		if(res == req->aio_cb_read.aio_nbytes//full buffer
+	       && req->read_offset != 0 // long message
+		){
+			req->read_offset += res;
+
+			sem_post(&req->sem_read);
+			aio_read(&req->aio_cb_read);
+			return;
+		}
+
+		if(req->read_offset != 0 && res != req->aio_cb_read.aio_nbytes){
+			//now message read to the end
+			req->read_offset = 0;
+		}
+
+		struct websocket_message_t *receive = 
+			websocket_decode_headers(req->read_buffer);
+
+		if(is_opcode_valid(receive->opcode) == false){
+			//TODO: invalid message, handle disconnect
+			return;
+		}
+		
 		//TODO: handle long messages
 		receive->fin = 1;
 		if(receive->opcode == OPPING){
@@ -126,6 +170,10 @@ void async_dataframe_read_completition_handler(sigval_t sigval){
 			receive->data_pointer = NULL;
 		} else {
 			receive->opcode = OPTEXT;
+		}
+
+		if(receive->is_masked == 1){
+			receive = websocket_unxor_message(receive);
 		}
 		receive->is_masked = 0;
 
@@ -144,7 +192,6 @@ void async_dataframe_read_completition_handler(sigval_t sigval){
 			data_pointer, 
 			strlen(data_pointer)
 		);
-
 		free(data_pointer);
 
 		//TODO: socket connection statement
@@ -220,6 +267,8 @@ int main(int argc, char *argv[])
 		}
 
 		(clients[client_offset]).read_capacity = BUFFER_SIZE;
+		(clients[client_offset]).read_offset = 0;
+		(clients[client_offset]).read_buffer = calloc(1, BUFFER_SIZE + 1);
 		(clients[client_offset]).aio_cb_read = (struct aiocb){
 			.aio_fildes = (clients[client_offset]).socketfd,
 			.aio_buf = calloc(1, BUFFER_SIZE + 1),
