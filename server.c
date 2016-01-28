@@ -18,24 +18,36 @@ static bool is_opcode_valid(uint8_t opcode){
 	return true;
 }
 
-int8_t handle_write_buffer(struct client_t* req, char *data_pointer){
-	size_t answer_length;
-
-	if ((answer_length = strlen(data_pointer)) <= req->write_capacity) {
-		req->aio_cb_write.aio_nbytes = answer_length;
-	} else {
+int8_t handle_write_buffer(struct client_t* req, size_t size){
+	if (size > req->write_capacity) {
 		//then extend buffer
-		char *ptr = realloc(&req->aio_cb_write.aio_buf, answer_length + 1);
+		char *ptr = realloc((void*)req->aio_cb_write.aio_buf, size + 1);
 		if (ptr != NULL) {
-			req->write_capacity = answer_length;
+			req->write_capacity = size;
 			req->aio_cb_write.aio_buf = ptr;
-			req->aio_cb_write.aio_nbytes = answer_length;
+			req->aio_cb_write.aio_nbytes = size;
 		} else {
 			//TODO: alloc failed, handle disconnect
 			return EWBUF;
 		}
+	} else {
+		req->aio_cb_write.aio_nbytes = size;
 	}
 	return SWBUF;
+}
+
+int8_t handle_read_buffer(struct client_t* req, size_t size){
+	if(req->read_capacity < size){
+		//then increase offset 
+		char *ptr = realloc(req->read_buffer, size);
+		if(ptr == NULL){
+			//TODO: handle disconnect
+			return ERBUF;
+		}
+		req->read_capacity = size;
+		req->read_buffer = ptr;
+	}
+	return SRBUF;
 }
 
 void async_headers_read_completition_handler(sigval_t sigval){
@@ -59,7 +71,6 @@ void async_headers_read_completition_handler(sigval_t sigval){
 			key
 		);
 		
-		sem_post(&req->sem_read);
 		if(is_headers_valid == false){
 			//TODO: invalid headers, handle disconnect
 			return;
@@ -79,7 +90,7 @@ void async_headers_read_completition_handler(sigval_t sigval){
 
 		sem_wait(&req->sem_write);
 
-		uint8_t status = handle_write_buffer(req, data_pointer);
+		uint8_t status = handle_write_buffer(req, strlen(data_pointer));
 		if(status != SWBUF){
 			return;
 		}
@@ -94,6 +105,7 @@ void async_headers_read_completition_handler(sigval_t sigval){
 
 		//TODO: socket connection statement
 		aio_write(&req->aio_cb_write);
+		sem_post(&req->sem_read);
 	}
 	//TODO: socket connection statement
 	aio_read(&req->aio_cb_read);
@@ -102,21 +114,16 @@ void async_headers_read_completition_handler(sigval_t sigval){
 }
 
 void async_dataframe_read_completition_handler(sigval_t sigval){
-	struct client_t *req;
-	req = (struct client_t*)sigval.sival_ptr;
-	ssize_t res;
-	char *data_pointer;
+	struct client_t *req = (struct client_t*)sigval.sival_ptr;
 
-	if (aio_error( &req->aio_cb_read ) == 0) {
-		res = aio_return(&req->aio_cb_read);
-		
+	if (aio_error( &req->aio_cb_read ) == 0){
 		sem_wait(&req->sem_read);
+		ssize_t res = aio_return(&req->aio_cb_read);
 
 		if(res == -1){
 			//handle disconnect
 			return;
 		}
-
 		//for next reading
 		memcpy(
 			req->read_buffer + req->read_offset,
@@ -124,75 +131,73 @@ void async_dataframe_read_completition_handler(sigval_t sigval){
 			res
 		);
 
+		//read_offset = 0 means current read is the first frame of message
 		if(req->read_offset == 0){
 			struct websocket_message_t *receive = 
 				websocket_decode_headers(req->read_buffer);
-			size_t len;
-			if(req->read_capacity < (len = calc_message_length(receive))){
-				//then increase offset 
-				char *ptr = realloc(req->read_buffer, len);
-				if(ptr == NULL){
-					//TODO: handle disconnect
-					return;
-				}
-				req->read_capacity = len;
-				req->read_buffer = ptr;
+						
+			//extend buffer if necessary
+			int8_t status = handle_read_buffer(req, calc_message_length(receive));
+			if(status != SRBUF){
+				//TODO: handle disconnect
+				return;
 			}
 		}
 
-		if(res == req->aio_cb_read.aio_nbytes//full buffer
-	       && req->read_offset != 0 // long message
-		){
+		//read BUFFER_SIZE blocks one by one in buffer by read_offset
+		if(res == req->aio_cb_read.aio_nbytes){ //full aio buffer
 			req->read_offset += res;
 
-			sem_post(&req->sem_read);
 			aio_read(&req->aio_cb_read);
+			sem_post(&req->sem_read);
 			return;
 		}
 
+		//last frame in message
 		if(req->read_offset != 0 && res != req->aio_cb_read.aio_nbytes){
-			//now message read to the end
+			//message read to the end
 			req->read_offset = 0;
 		}
 
+		//
+		//BEGIN: MESSAGE PROCESSING LOGIC
+		//
 		struct websocket_message_t *receive = 
 			websocket_decode_headers(req->read_buffer);
-
-		if(is_opcode_valid(receive->opcode) == false){
+	
+		if(is_opcode_valid(receive->opcode) == false || receive->is_masked == false){
 			//TODO: invalid message, handle disconnect
 			return;
 		}
 		
-		//TODO: handle long messages
-		receive->fin = 1;
-		if(receive->opcode == OPPING){
-			receive->opcode = OPPONG;
-			receive->data_pointer = NULL;
-		} else {
-			receive->opcode = OPTEXT;
-		}
+		struct websocket_message_t *answer = 
+			websocket_message_processing(receive);
 
-		if(receive->is_masked == 1){
-			receive = websocket_unxor_message(receive);
-		}
-		receive->is_masked = 0;
-
-		data_pointer = websocket_encode_message(receive);
 		free(receive);
 
-		sem_post(&req->sem_read);
-		sem_wait(&req->sem_write);
-		uint8_t status = handle_write_buffer(req, data_pointer);
+		char *encoded_answer = websocket_encode_message(answer);
+
+		//
+		//END: MESSAGE PROCESSING LOGIC
+		//
+		
+
+		uint8_t status = handle_write_buffer(req, calc_message_length(answer));
 		if(status != SWBUF){
+			//TODO: handle disconnect
 			return;
 		}
 
+		sem_wait(&req->sem_write);
 		memcpy(
-			(char*)req->aio_cb_write.aio_buf, 
-			data_pointer, 
-			strlen(data_pointer)
+			(void*)req->aio_cb_write.aio_buf, 
+			encoded_answer, 
+			calc_message_length(answer)
 		);
-		free(data_pointer);
+		sem_post(&req->sem_read);
+		free(encoded_answer);
+		free(answer->data_pointer);
+		free(answer);
 
 		//TODO: socket connection statement
 		aio_write(&req->aio_cb_write);
@@ -210,14 +215,11 @@ void async_write_completition_handler(sigval_t sigval){
 	/* Did the request complete? */
 	if (aio_error( &req->aio_cb_write ) == 0){
 		res = aio_return( &req->aio_cb_write );
-
 		sem_post(&req->sem_write);
     }
 
     return;
 }
-
-
 
 int main(int argc, char *argv[])
 {
@@ -228,7 +230,7 @@ int main(int argc, char *argv[])
 	size_t client_offset = 0;
 	ssize_t aio_read_ret;
 
-	struct client_t *clients = calloc(1, sizeof(struct client_t)*MAX_CLIENTS);
+	struct client_t *clients = malloc(sizeof(struct client_t)*MAX_CLIENTS);
     struct sockaddr_in serv_addr;
 	int32_t clilen = sizeof(serv_addr);
 
@@ -271,7 +273,7 @@ int main(int argc, char *argv[])
 		(clients[client_offset]).read_buffer = calloc(1, BUFFER_SIZE + 1);
 		(clients[client_offset]).aio_cb_read = (struct aiocb){
 			.aio_fildes = (clients[client_offset]).socketfd,
-			.aio_buf = calloc(1, BUFFER_SIZE + 1),
+			.aio_buf = malloc(BUFFER_SIZE + 1),
 			.aio_nbytes = BUFFER_SIZE,
 			.aio_offset = 0
 		};
@@ -294,7 +296,7 @@ int main(int argc, char *argv[])
 		(clients[client_offset]).write_capacity = BUFFER_SIZE;
 		(clients[client_offset]).aio_cb_write = (struct aiocb){
 			.aio_fildes = (clients[client_offset]).socketfd,
-			.aio_buf = calloc(1, BUFFER_SIZE + 1),
+			.aio_buf = malloc(BUFFER_SIZE + 1),
 			.aio_nbytes = BUFFER_SIZE,
 			.aio_offset = 0
 		};

@@ -44,6 +44,7 @@ struct websocket_message_t{
 
 
 int32_t websocket_calculate_hash(const unsigned char *const user_handshake, unsigned char *server_handshake);
-struct websocket_message_t * websocket_decode_headers(void *buffer);
-struct websocket_message_t *websocket_unxor_message(struct websocket_message_t *message);
+struct websocket_message_t *websocket_decode_headers(void *buffer);
+struct websocket_message_t *websocket_message_processing(struct websocket_message_t *receive);
 char * websocket_encode_message(const struct websocket_message_t *message);
+void websocket_unxor_message(char *data, char *mask, size_t length);

@@ -1,14 +1,11 @@
 #include "websocket.h"
 
-
-//lyl, what the hell?
 static size_t bytes_to_number(unsigned char *buffer, size_t from, size_t to){
 	//dirty hack
-	size_t result = *((size_t*)&buffer[from]);
-	if(to - from == 2){
-		result = result & 0xFF;
-	} else if(to - from == 4){
-		result = result & 0xFFFF;
+	size_t result = 0, i;
+	for(i = from; i < to; i++){
+		result = result << 8;
+		result += buffer[i];
 	}
 	return result;
 }
@@ -42,8 +39,7 @@ int websocket_calculate_hash(const unsigned char *const user_handshake, unsigned
         return 1;
     size_t magic_length = strlen(magic);
 	//sucks
-	//TODO: remove dat calloc
-    unsigned char *handshake = calloc(handshake_length + magic_length + 1, sizeof(char));
+    unsigned char *handshake = malloc(handshake_length + magic_length + 1);
     strcat(handshake, user_handshake);
     strcat(handshake, magic);
 
@@ -55,7 +51,7 @@ int websocket_calculate_hash(const unsigned char *const user_handshake, unsigned
 }
 
 
-/*
+/* RFC WebSocket DATAFRAME
 	   0                   1                   2                   3
 	  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 	 +-+-+-+-+-------+-+-------------+-------------------------------+
@@ -75,16 +71,13 @@ int websocket_calculate_hash(const unsigned char *const user_handshake, unsigned
 	 |                     Payload Data continued ...                |
 	 +---------------------------------------------------------------+
 */
-//message decoded in the same memory
 struct websocket_message_t *websocket_decode_headers(void *ptr){
 	unsigned char *buffer = ptr;
-	struct websocket_message_t *message = calloc(1, sizeof(struct websocket_message_t));
+	struct websocket_message_t *message = malloc(sizeof(struct websocket_message_t));
 
 	int8_t highter_bit_mask = 0x80;
 	int8_t opcode_mask = 0x0F;
 	int8_t payload_mask = 0x7F;
-
-
 
 	unsigned char *mask = NULL;
 
@@ -109,11 +102,11 @@ struct websocket_message_t *websocket_decode_headers(void *ptr){
 		message->data_pointer = buffer+6;
 	} else if(payload_length == 126){
 		mask = buffer+4;
-		payload_length = bytes_to_number(buffer+2, 2, 4);
+		payload_length = bytes_to_number(buffer, 2, 4);
 		message->data_pointer = buffer+8;
 	} else if(payload_length == 127){
 		mask = buffer+10;
-		payload_length = bytes_to_number(buffer+2, 2, 10);
+		payload_length = bytes_to_number(buffer, 2, 10);
 		message->data_pointer = buffer+14;
 	}
 
@@ -124,22 +117,15 @@ struct websocket_message_t *websocket_decode_headers(void *ptr){
 	return message;
 }
 
-struct websocket_message_t *websocket_unxor_message(struct websocket_message_t *message){
-	if (message->is_masked) {
-		char *mask = message->data_pointer-4;
-		for (size_t i = 0; i < message->length; i++) {
-			message->data_pointer[i] = message->data_pointer[i] ^ mask[i % 4];
-		}
+void websocket_unxor_message(char *data, char *mask, size_t length){
+	for (size_t i = 0; i < length; i++) {
+		data[i] = data[i] ^ mask[i % 4];
 	}
-
-	return message;
 }
 
-
-	//dont forget clean malloc allocations
 char *websocket_encode_message(const struct websocket_message_t *message){
 	size_t header_length = 2 + message->is_masked*4;
-	size_t payload_length = strlen(message->data_pointer);
+	size_t payload_length = message->length;
 	size_t payload_length_save = payload_length;
 
 	if(payload_length >= 65536){
@@ -150,7 +136,7 @@ char *websocket_encode_message(const struct websocket_message_t *message){
 		header_length += 2; //16 bits for length
 	}
 
-	char *bytes = calloc(1, header_length + payload_length + 1);
+	char *bytes = malloc(header_length + payload_length + 1);
 	char *ptr = bytes;
 
 	bytes[0] = (message->fin << 7) | message->opcode; //fin,rsrv + opcode
@@ -176,4 +162,28 @@ char *websocket_encode_message(const struct websocket_message_t *message){
 	}
 
 	return bytes;
+}
+
+struct websocket_message_t *websocket_message_processing(struct websocket_message_t *receive){
+	struct websocket_message_t *answer = malloc(sizeof(struct websocket_message_t));
+
+	answer->fin = 1;
+	if(receive->opcode == OPPING){
+		answer->opcode = OPPONG;
+		answer->data_pointer = NULL;
+	} else {
+		answer->opcode = OPTEXT;
+	}
+
+	if(receive->is_masked == 1){
+		char *data = malloc(receive->length);
+		char mask[4] = {0};
+		memcpy(data, receive->data_pointer, receive->length);
+		memcpy(mask, receive->data_pointer-4, 4);
+		websocket_unxor_message(data, mask, receive->length);
+		answer->data_pointer = data;
+	}
+	answer->length = receive->length;
+
+	return answer;
 }
