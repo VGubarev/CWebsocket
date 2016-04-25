@@ -1,4 +1,3 @@
-UnixWay websocket server
+CWebsocket server
 ========================
-I should promise you: this repo is a result of my sick imagination. 
-So if you want to use it, be prepared for the question: why?!?!?!? omg, why!?
+Simple websocket (underconsturcted) server written by C. There are asyncronous IO in server provided by glibc interfaces aio_read/aio_write etc.
